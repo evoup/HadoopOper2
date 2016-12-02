@@ -1,0 +1,61 @@
+1.简单例子演示
+通过parallelize方法定义了一个从1~10的数据集，然后通过map(_*2)对数据集每个数乘以2，
+接着通过filter(_%3==0)过滤被3整除的数字，最后使用toDebugString显示RDD的LineAge，并通过collect计算出最终的结果
+val num = sc.parallelize(1 to 10)
+val doublenum = num.map(_*2)
+val threenum = doublenum.filter(_ % 3 == 0)
+threenum.toDebugString
+threenum.collect
+
+num.reduce (_ + _)
+num.take(5)
+num.first
+num.count
+num.take(5).foreach(println)
+num.take(6).foreach(println)
+
+2.Shuffle操作例子演示
+val kv1 = sc.parallelize(List(("A",1),("B",2),("C",3),("A",4),("B",5)))
+kv1.sortByKey().collect     //sortByKey本身是1个job
+kv1.groupByKey().collect
+kv1.reduceByKey(_+_).collect
+
+val kv2 = sc.parallelize(List(("A",4),("A",4),("C",3),("A",4),("B",5)))
+kv2.distinct.collect
+kv1.union(kv2).collect
+ 
+val kv3 = sc.parallelize(List(("A",10),("B",20),("D",30)))
+kv1.join(kv3).collect
+
+3.文件例子读取
+val text = sc.textFile("hdfs://huike:9000/wordcount/word.txt")
+text.toDebugString
+val words = text.flatMap(_.split(" "))
+val wordscount = words.map(x=>(x,1)).reduceByKey(_+_)
+wordscount.toDebugString
+wordscount.collect
+
+4.搜索日志例子演示
+文件中字段分别为：访问时间\tcookieId\t查询词\t该URL在返回结果中的排名\t用户点击的顺序号\t用户点击的URL
+
+4.1 查询搜索结果排名第1点击次序排在第2的数据
+val rdd1 = sc.textFile("hdfs://huike:9000/spark/SearchLog.txt")
+val rdd2 = rdd1.map(_.split("\t")).filter(_.length==6)
+rdd2.toDebugString
+rdd2.count
+val rdd3=rdd2.filter(_(3).toInt == 1).filter(_(4).toInt == 2)
+rdd3.toDebugString
+rdd3.count
+
+4.2 Session查询次数排行榜并把结果保存在HDFS中
+val rdd4 = rdd2.map(x=>(x(1), 1)).reduceByKey(_ + _).map(x=>(x._2, x._1)).sortByKey(false).map(x=>(x._2, x._1))
+rdd4.toDebugString
+rdd4.saveAsTextFile("hdfs://huike:9000/spark/SearchLogOutput")
+rdd4.cache
+rdd4.count
+rdd4.count
+
+5.执行程序
+bin/spark-submit --name WordCount --class com.huike.core.WordCount --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar
+bin/spark-submit --name SearchLogAnalyze --class com.huike.core.SearchLogAnalyze --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar /spark/SearchLog.txt /spark/SearchLogOutput
+bin/spark-submit --name JoinExample --class com.huike.core.JoinExample --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar  /spark/Customer.txt  /spark/Order.txt

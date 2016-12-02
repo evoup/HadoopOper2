@@ -1,0 +1,7 @@
+scala /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar /home/hadoop/data/sparkstreaming/OrderDetail.txt 9999 1000
+
+
+bin/spark-submit --name SaleAmount --class com.huike.streaming.SaleAmount --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar  localhost 9999 5
+bin/spark-submit --name StatefulSaleAmount --class com.huike.streaming.StatefulSaleAmount --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar  localhost  9999  5
+bin/spark-submit --name WindowSaleAmount --class com.huike.streaming.WindowSaleAmount --master yarn-client --executor-memory 512m --executor-cores 2  /home/hadoop/jar/spark-example-1.0-SNAPSHOT.jar  localhost  9999  30 10 5
+

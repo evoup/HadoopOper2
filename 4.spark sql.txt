@@ -1,0 +1,167 @@
+1.RDD转DataFrame ———— case class方式
+
+//生成RDD
+val rdd = sc.textFile("hdfs://huike:9000/spark/SearchLog.txt")
+
+//创建一个表示搜索日志的自定义类
+case class SearchLog(time: String, cookieId: String, keyword: String, resultNo: Int, clickNo: Int, clickUrl: String)
+
+//用数据集文本文件创建一个Customer对象的DataFrame
+val dfLog = rdd.map(_.split("\t")).filter(_.length==6).map(p => SearchLog(p(0), p(1), p(2), p(3).trim.toInt, p(4).trim.toInt, p(5))).toDF()
+
+//打印DF模式
+dfLog.printSchema()
+
+//查询总记录数
+dfLog.count
+
+//显示前20行
+dfLog.show(20)
+
+dfLog.select("keyword").show(20)
+
+dfLog.select("keyword", "clickUrl").show(20)
+
+//包含baidu的数据
+dfLog.filter("clickUrl like '%baidu%'").count
+
+//查询结果排名第1，点击次序不排第1的数据
+dfLog.filter("resultNo = 1 and clickNo != 1").count
+
+//查询结果排名第1，点击次序不排第1的数据，其中URL包含baidu的数据
+dfLog.filter("resultNo = 1 and clickNo != 1 and clickUrl like '%baidu%'").count
+dfLog.filter("resultNo = 1 and clickNo != 1 and clickUrl like '%baidu%'").collect
+
+//查询次数排行榜
+//按照cookieId分组，并按照查询次数进行排序，最终显示查询次数最多的前10条
+dfLog.groupBy("cookieId").agg(count('clickUrl) as "clickUrlCount").sort($"clickUrlCount".desc).show(10)
+
+
+//将DataFrame注册为一个表
+dfLog.registerTempTable("logs")
+
+//用sqlContext对象提供的sql方法执行SQL语句。
+val dfLogTable = sqlContext.sql("select time, cookieId, keyword, resultNo, clickNo, clickUrl from logs where resultNo = 1 and clickNo != 1")
+
+//SQL查询的返回结果为DataFrame对象，支持所有通用的RDD操作
+dfLogTable.map(t => t(2) + "," + t(5)).collect().foreach(println)
+
+
+2.RDD转DataFrame ———— applySchema方式
+
+//生成RDD
+val rdd = sc.textFile("hdfs://huike:9000/spark/SearchLog.txt")
+
+//用字符串编码Schema
+val schemaString = "time,cookieId,keyword,resultNo,clickNo,clickUrl"
+
+//导入Spark SQL数据类型和Row
+import org.apache.spark.sql._
+import org.apache.spark.sql.types._
+
+//用模式字符串生成模式对象
+val schema = StructType(schemaString.split(",").map(fieldName => StructField(fieldName, StringType, true)))
+
+//将RDD[String]记录转化成RDD[Row]
+val rowRDD = rdd.map(_.split("\t")).map(p => Row(p(0).trim,p(1),p(2),p(3),p(4),p(5)))
+
+//将模式应用于RDD对象
+val dfLog = sqlContext.createDataFrame(rowRDD, schema)
+
+
+//打印DF模式
+dfLog.printSchema()
+
+//查询总记录数
+dfLog.count
+
+//显示前20行
+dfLog.show(20)
+
+dfLog.select("keyword").show(20)
+
+dfLog.select("keyword", "clickUrl").show(20)
+
+//包含baidu的数据
+dfLog.filter("clickUrl like '%baidu%'").count
+
+//查询结果排名第1，点击次序不排第1的数据
+dfLog.filter("resultNo = 1 and clickNo != 1").count
+
+//查询结果排名第1，点击次序不排第1的数据，其中URL包含baidu的数据
+dfLog.filter("resultNo = 1 and clickNo != 1 and clickUrl like '%baidu%'").count
+dfLog.filter("resultNo = 1 and clickNo != 1 and clickUrl like '%baidu%'").collect
+
+//查询次数排行榜
+//按照cookieId分组，并按照查询次数进行排序，最终显示查询次数最多的前10条
+dfLog.groupBy("cookieId").agg(count('clickUrl) as "clickUrlCount").sort($"clickUrlCount".desc).show(10)
+
+
+//将DataFrame注册为一个表
+dfLog.registerTempTable("logs")
+
+//用sqlContext对象提供的sql方法执行SQL语句。
+val dfLogTable = sqlContext.sql("select time, cookieId, keyword, resultNo, clickNo, clickUrl from logs where resultNo = 1 and clickNo != 1")
+
+//SQL查询的返回结果为DataFrame对象，支持所有通用的RDD操作
+dfLogTable.map(t => t(2) + "," + t(5)).collect().foreach(println)
+
+3.json转DataFrame和cache使用
+
+val orderDF = sqlContext.read.json("/spark/Order.json")
+orderDF.printSchema()
+orderDF.show()
+
+orderDF.registerTempTable("orderTable")
+sqlContext.sql("CACHE TABLE orderTable")
+
+val allrecords = sqlContext.sql("SELECT * FROM orderTable")
+allrecords.filter("quantity=1").show()
+allrecords.map(t => "cid: " + t(0)).collect().foreach(println)
+
+//解除缓存
+sqlContext.sql("UNCACHE TABLE orderTable")
+
+orderDF.limit(5).write.mode("overwrite").json("/spark/OrderOutputJson")
+orderDF.write.parquet("/spark/OrderOutputParquet")
+
+
+4.parquet转DataFrame和cache使用
+
+val orderParquetDF = sqlContext.read.parquet("/spark/OrderOutputParquet")
+orderParquetDF.registerTempTable("orderParquetTable")
+sqlContext.cacheTable("orderParquetTable")
+
+val allrecords = sqlContext.sql("SELECT * FROM orderParquetTable")
+allrecords.filter("quantity=1").show()
+allrecords.map(t => "cid: " + t(0)).collect().foreach(println)
+
+//解除缓存
+sqlContext.uncacheTable("orderParquetTable")
+
+5.hive表转DataFrame
+val hiveContext = new org.apache.spark.sql.hive.HiveContext(sc)
+hiveContext.sql("use saledata")
+hiveContext.sql("show tables").collect().foreach(println)
+hiveContext.sql("select a.ordernumber,sum(b.amount) as sumofamount from order a,orderdetail b where a.ordernumber=b.ordernumber group by a.ordernumber having sumofamount>3000").collect.foreach(println)
+    
+val df = hiveContext.sql("select a.ordernumber,sum(b.amount) as sumofamount from order a,orderdetail b where a.ordernumber=b.ordernumber group by a.ordernumber having sumofamount>3000")
+df.show(4)
+
+6.hive表与非hive表混合使用
+6.1创建Hive Table，从本地文件系统加载数据
+hiveContext.sql("create database spark_customer_order")
+hiveContext.sql("use spark_customer_order")
+hiveContext.sql("create table customer(cid string,firstname string,lastname string) row format delimited fields terminated by ',' lines terminated by '\n' stored as textfile")
+hiveContext.sql("LOAD DATA LOCAL INPATH '/home/hadoop/data/sparksql/Customer.txt' INTO TABLE customer")
+hiveContext.sql("select * from customer").show()
+
+6.2创建json表，从HDFS加载数据
+hiveContext.read.json("file:///home/hadoop/data/sparksql/Order.json").registerTempTable("order")
+
+6.3两个表混合使用
+hiveContext.sql("select c.*, o.quantity, o.price from customer c join order o on c.cid = o.cid").collect().foreach(println)
+
+
+
+

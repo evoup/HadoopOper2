@@ -1,0 +1,306 @@
+一、HiveQL 示例
+1.创建2张表，分别从本地和hdfs上加载数据
+create table customer(
+   cid string,
+   firstname string,
+   lastname string
+)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile;
+
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/customer_order/Customer.txt' INTO TABLE customer;
+
+hdfs dfs -put /home/hadoop/data/hive/customer_order/Order.txt  /customer_order/order
+
+create table order(
+   cid string,
+   quantity int,
+   price int
+)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile;
+
+LOAD DATA INPATH '/customer_order/order' INTO TABLE order;
+
+2.查看表信息
+show tables;
+desc customer;
+desc order;
+
+3.登录mysql，在TBLS表中查看新增的表
+mysql -uhive -ppwd
+use hive;
+select TBL_ID, CREATE_TIME, DB_ID, OWNER, TBL_NAME,TBL_TYPE from TBLS;
+select DB_ID, DB_LOCATION_URI, NAME from DBS;
+
+4.执行查询操作
+select * from customer;
+select * from order;
+select * from customer join order on customer.cid = order.cid;
+
+5.删除表
+drop table customer;
+drop table order;
+
+二、Hive分区示例
+1.创建分区表
+create table order(
+   cid string,
+   quantity int,
+   price int
+)partitioned by(dt string, hour string)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile;
+
+2.加载数据
+LOAD DATA local INPATH '/home/hadoop/data/hive/customer_order/order/20161101/08' INTO TABLE order PARTITION(dt='2016-11-01', hour='08');
+LOAD DATA local INPATH '/home/hadoop/data/hive/customer_order/order/20161101/09' INTO TABLE order PARTITION(dt='2016-11-01', hour='09');
+LOAD DATA local INPATH '/home/hadoop/data/hive/customer_order/order/20161102/08' INTO TABLE order PARTITION(dt='2016-11-02', hour='08');
+LOAD DATA local INPATH '/home/hadoop/data/hive/customer_order/order/20161102/09' INTO TABLE order PARTITION(dt='2016-11-02', hour='09');
+
+3.查询
+select count(*) from order;
+
+select * from customer join order on customer.cid = order.cid where dt='2016-11-01' and hour='08';
+
+
+三、Hive分桶示例
+1.创建分桶表
+create table order_bucket(
+   cid string,
+   quantity int,
+   price int
+)partitioned by(dt string, hour string)
+clustered by (cid) into 2 buckets
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile;
+
+2.插入数据
+set hive.enforce.bucketing=true;
+
+FROM order
+INSERT OVERWRITE TABLE order_bucket
+PARTITION(dt='2016-11-01', hour='08')
+SELECT cid, quantity, price WHERE dt='2016-11-01' and hour='08';
+
+
+四、Join示例
+1.redcue join/shuffle join
+
+select * from customer join order on customer.cid = order.cid;
+
+2.map join/broadcast join
+第一种方式，自动方式
+set hive.auto.convert.join=true;
+set hive.mapjoin.smalltable.filesize=300000000;  //默认值25MB
+select * from customer join order on customer.cid = order.cid;
+
+第二种方式，手动指定
+select /*+mapjoin(c)*/ c.cid, c.firstname, o.quantity, o.price from customer c join order o on c.cid = o.cid;
+
+
+3.sort merge bucket join
+//创建表，分桶并排序
+create table order_bucket(
+   cid string,
+   quantity int,
+   price int
+)
+clustered by (cid) sorted by(cid) into 64 buckets;
+
+create table customer(
+   cid string,
+   firstname string,
+   lastname string
+)clustered by (cid) sorted by(cid) into 64 buckets;
+
+//加载数据
+set hive.enforce.bucketing = true;  
+INSERT OVERWRITE TABLE..
+
+//设置sort merge bucket join的参数
+set hive.optimize.bucketmapjoin = true;  
+set hive.optimize.bucketmapjoin.sortedmerge = true;  
+set hive.input.format=org.apache.hadoop.hive.ql.io.BucketizedHiveInputFormat; 
+
+//基于分桶字段join, 即Bucket column==Sort Column==Join Column，具备SMB Join条件
+select * from customer join order on customer.cid = order.cid;
+
+4.left semi join
+//left semi join关键字前面的表为主表，返回主表的KEY也在副表中的记录
+//等同于"select c.cid, c.firstname from customer c where c.cid in (select o.cid from order o);"
+
+select c.cid, c.firstname from customer c left semi join order o on c.cid = o.cid;
+
+五、Function示例
+1、WordCount
+create table words(line string);
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/hive_function/words.txt' INTO TABLE words;
+
+select split(line, ' ') from words;
+select explode(split(line,' '))  from words; 
+select t.word, count(1) from (select explode(split(line,' ')) as word  from words) t group by t.word; 
+
+2、多行转一行
+create table user(
+   id string,
+   name string
+)
+row format delimited
+fields terminated by  ' ';
+
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/hive_function/user.txt' INTO TABLE user;
+
+create table address(
+   name  string,
+   addr string
+)
+row format delimited
+fields terminated by ' ';
+
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/hive_function/address.txt' INTO TABLE address;
+
+select user.id, user.name, address.addr from user join address on user.name = address.name;
+
+select max(user.id), user.name, collect_set(address.addr) from user join address on user.name = address.name 
+group by user.name;
+
+select max(user.id) as id, user.name, concat_ws(",",collect_set(address.addr)) from user join address on user.name = address.name group by user.name order by id;
+
+//总结：concat_ws(",",collect_set(多行转换一行的字段)) group by 分组字段
+
+create table user_address(
+   id string,
+   name  string,
+   addr string
+)
+row format delimited
+fields terminated by ' ';
+
+INSERT OVERWRITE TABLE user_address
+select max(user.id) as id, user.name, concat_ws(",",collect_set(address.addr)) from user join address on user.name = address.name group by user.name order by id;
+ 
+select * from user_address;
+
+3、一行转多行
+
+select id, name, address  from user_address lateral view explode(split(addr,',')) a  as address; 
+
+
+六、Hive 例子——物流
+1. 创建数据库和表、并导入数据，注意serdeproperties中$.后面的字段大小写与json文件中的一致
+create database logistics;
+use logistics;
+ADD JAR /var/hive/hive-1.1.0-cdh5.4.5/hive-json-serde.jar;
+create external table driver (
+   driverId string, 
+   firstName string,
+   lastName string,
+   email string
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.contrib.serde2.JsonSerde'
+with serdeproperties (
+   "driverId"="$.driverid",          
+   "firstName"="$.firstname",
+   "lastName"="$.lastname",
+   "email"="$.email"
+)
+LOCATION '/logistics/driver';
+
+select * from driver limit 2;
+
+CREATE EXTERNAL TABLE timesheet(
+     id String,
+     driverId string, 
+     week int, 
+     hours int, 
+     miles int)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.contrib.serde2.JsonSerde'
+with serdeproperties (
+   "id"="$.id",
+   "driverId"="$.driverid",
+   "week"="$.week",
+   "hours"="$.hours",
+   "miles"="$.miles"
+) LOCATION '/logistics/timesheet';
+
+select * from timesheet limit 2;
+
+3.数据分析
+3.1统计每个驾驶员的工作小时量和行驶里程数
+SELECT driverId, sum(hours) total_hours, sum(miles) total_miles FROM timesheet GROUP BY driverId;
+3.2统计每个驾驶员的工作小时量和行驶里程数,并显示驾驶员的个人信息
+create table workload_parquet(
+   driverId string,
+   firstname string,
+   lastname string,
+   total_hours int,
+   total_miles int
+)stored as parquet
+tblproperties("parquet.compress"="snappy");
+
+INSERT OVERWRITE TABLE workload_parquet
+SELECT d.driverId, d.firstname, d.lastname, t.total_hours, t.total_miles from driver d  
+JOIN (SELECT driverId, sum(hours) total_hours, sum(miles) total_miles FROM timesheet GROUP BY driverId ) t  
+ON (d.driverId = t.driverId);
+
+select * from workload_parquet;
+
+
+create table workload_orcfile (
+   driverId string,
+   firstname string,
+   lastname string,
+   total_hours int,
+   total_miles int
+)stored as orc 
+tblproperties ("orc.compress"="ZLIB");
+
+INSERT OVERWRITE TABLE workload_orcfile
+SELECT driverId, firstname, lastname, total_hours, total_miles from workload;
+
+
+七、Hive 例子——订单
+1. 创建数据库和表
+create database saledata;
+use saledata;
+CREATE TABLE date
+  (dateid string,theyearmonth string,theyear string,themonth string,thedate string,theweek string,theweeks string,thequot string,thetenday string,thehalfmonth string) 
+   ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' ;
+CREATE TABLE order(ordernumber string,userid string,dateid string) 
+  ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' ;
+CREATE TABLE orderdetail(ordernumber string,rownum int,itemid string,qty int,price int ,amount int) 
+  ROW FORMAT DELIMITED FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n' ;
+2.导入数据
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/saledata/Date.txt' INTO TABLE Date;
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/saledata/Order.txt' INTO TABLE Order;
+LOAD DATA LOCAL INPATH '/home/hadoop/data/hive/saledata/OrderDetail.txt' INTO TABLE OrderDetail;
+查看HDFS中SALEDATA数据库中增加了三个文件夹，分别对应三个表
+3.数据分析
+3.1列出销售金额在3000以上的订单
+select a.ordernumber,sum(b.amount) as sumofamount from order a,orderdetail b where a.ordernumber=b.ordernumber group by a.ordernumber having sumofamount>3000;
+3.2计算每年的销售总金额
+//按年份分组，关联order表和orderdetail表，获取订单金额信息；关联order表和date表，获取订单所在年份
+select c.theyear, sum(b.amount) from order a,orderdetail b,date c where a.ordernumber=b.ordernumber and a.dateid=c.dateid group by c.theyear;
+3.3季度中所有订单销售额前2位
+//按年和季分组，计算季度销售额；按销售额排序；取前2位
+select c.theyear,c.thequot,sum(b.amount) as sumofamount from order a,orderdetail b,date c 
+  where a.ordernumber=b.ordernumber and a.dateid=c.dateid group by c.theyear,c.thequot order by sumofamount desc limit 2;
+3.4计算每年最大金额订单的销售额
+//获取每个订单的日期和销售额
+select a.dateid,sum(b.amount) as sumofamount from order a,orderdetail b where a.ordernumber=b.ordernumber group by a.dateid,a.ordernumber;
+//关联每个订单的日期所在的年份，按年分组，用Max函数，获取每年最大金额订单的销售额
+select c.theyear,max(d.sumofamount) from date c,
+  (select a.dateid,a.ordernumber,sum(b.amount) as sumofamount from order a,orderdetail b where a.ordernumber=b.ordernumber group by a.dateid,a.ordernumber) d  
+   where c.dateid=d.dateid group by c.theyear sort by c.theyear;
+
+
+
